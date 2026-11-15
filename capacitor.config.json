@@ -1,0 +1,8 @@
+{
+  "appId": "ir.hozourban.app",
+  "appName": "حضوربان",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}
