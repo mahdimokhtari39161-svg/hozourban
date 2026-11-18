@@ -1,110 +1,142 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, ArrowDownLeft, ArrowUpRight, Bell, Camera, Check, ChevronDown, Clock3, Download, LayoutDashboard, LogOut, Menu, Search, ShieldCheck, Users, UserRound, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Activity, Users, Clock3, LogOut, Settings, RefreshCw, Download, Plus, Check, X, ShieldCheck, CalendarDays, Wifi, WifiOff } from 'lucide-react';
+import { apiRequest, checkServer, connectionSettings } from './lib/api.js';
 
-const initialPeople = [
-  { id: '1001', name: 'علی رضایی', role: 'اپراتور خط تولید', shift: '۰۷:۰۰ تا ۱۵:۰۰', status: 'حاضر', time: '۰۷:۰۳', pin: '1234' },
-  { id: '1002', name: 'محمد کریمی', role: 'انباردار', shift: '۰۷:۰۰ تا ۱۵:۰۰', status: 'حاضر', time: '۰۷:۱۱', pin: '1234' },
-  { id: '1003', name: 'حسین احمدی', role: 'تکنسین فنی', shift: '۰۸:۰۰ تا ۱۶:۰۰', status: 'مرخصی', time: '—', pin: '1234' },
-  { id: '1004', name: 'رضا محمدی', role: 'راننده', shift: '۰۷:۰۰ تا ۱۵:۰۰', status: 'غایب', time: '—', pin: '1234' },
-  { id: '1005', name: 'امیر موسوی', role: 'کارشناس فروش', shift: '۰۸:۰۰ تا ۱۶:۰۰', status: 'حاضر', time: '۰۸:۰۲', pin: '1234' },
-];
 const faDate = new Intl.DateTimeFormat('fa-IR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 const faTime = () => new Intl.DateTimeFormat('fa-IR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date());
+const labels = { dashboard: 'داشبورد', employees: 'کارکنان', attendance: 'ترددها', leave: 'مرخصی‌ها', kiosk: 'ثبت تردد', settings: 'اتصال سرور' };
 
 export default function App() {
-  const [people, setPeople] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('hozourban-people')) || initialPeople; } catch { return initialPeople; }
-  });
-  const [events, setEvents] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('hozourban-events')) || []; } catch { return []; }
-  });
+  const [settings, setSettings] = useState(connectionSettings.get());
+  const [user, setUser] = useState(connectionSettings.user());
   const [tab, setTab] = useState('dashboard');
-  const [query, setQuery] = useState('');
-  const [pin, setPin] = useState('');
-  const [employeeId, setEmployeeId] = useState('');
+  const [serverStatus, setServerStatus] = useState('unknown');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [cameraOpen, setCameraOpen] = useState(false);
-  const [photo, setPhoto] = useState('');
-  const [streamError, setStreamError] = useState('');
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
   const [clock, setClock] = useState(faTime());
+  const [employees, setEmployees] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [leaves, setLeaves] = useState([]);
+  const [query, setQuery] = useState('');
+  const [login, setLogin] = useState({ employeeCode: '', password: '' });
+  const [newEmployee, setNewEmployee] = useState({ employeeCode: '', name: '', jobTitle: '', password: '', role: 'employee' });
+  const [attendance, setAttendance] = useState({ employeeCode: '', kind: 'in' });
+  const [leave, setLeave] = useState({ type: 'annual', startsAt: '', endsAt: '', reason: '' });
 
-  useEffect(() => { const t = setInterval(() => setClock(faTime()), 1000); return () => clearInterval(t); }, []);
-  useEffect(() => { localStorage.setItem('hozourban-people', JSON.stringify(people)); }, [people]);
-  useEffect(() => { localStorage.setItem('hozourban-events', JSON.stringify(events)); }, [events]);
-  useEffect(() => {
-    if (!cameraOpen) return;
-    let active = true;
-    navigator.mediaDevices?.getUserMedia({ video: { facingMode: 'user' }, audio: false })
-      .then(s => { if (active && videoRef.current) videoRef.current.srcObject = s; else s.getTracks().forEach(t => t.stop()); })
-      .catch(() => setStreamError('دسترسی به دوربین ممکن نیست. مجوز دوربین مرورگر را بررسی کنید.'));
-    return () => { active = false; videoRef.current?.srcObject?.getTracks().forEach(t => t.stop()); };
-  }, [cameraOpen]);
+  useEffect(() => { const timer = setInterval(() => setClock(faTime()), 1000); return () => clearInterval(timer); }, []);
+  const notify = message => { setNotice(message); window.setTimeout(() => setNotice(''), 3500); };
+  const loadData = useCallback(async () => {
+    setBusy(true); setError('');
+    try {
+      const [people, attendanceData, leaveData] = await Promise.all([
+        apiRequest('/api/employees'),
+        apiRequest('/api/attendance'),
+        apiRequest('/api/leave'),
+      ]);
+      setEmployees(people.employees || []);
+      setEvents(attendanceData.events || []);
+      setLeaves(leaveData.requests || []);
+      setServerStatus('online');
+    } catch (e) { setError(e.message); if (/ارتباط|آدرس سرور/.test(e.message)) setServerStatus('offline'); }
+    finally { setBusy(false); }
+  }, []);
 
-  const present = people.filter(p => p.status === 'حاضر').length;
-  const filtered = useMemo(() => people.filter(p => (p.name + p.id + p.role).includes(query.trim())), [people, query]);
-  const todayEvents = events.filter(e => e.date === new Date().toLocaleDateString('en-CA'));
-  const notify = message => { setNotice(message); setTimeout(() => setNotice(''), 3200); };
+  useEffect(() => { if (user && connectionSettings.token()) loadData(); }, [user, loadData]);
 
-  const startCamera = () => { setPhoto(''); setStreamError(''); setCameraOpen(true); };
-  const takePhoto = () => {
-    const v = videoRef.current, c = canvasRef.current;
-    if (!v || !c || !v.videoWidth) { setStreamError('تصویر دوربین هنوز آماده نیست.'); return; }
-    c.width = v.videoWidth; c.height = v.videoHeight;
-    c.getContext('2d').drawImage(v, 0, 0);
-    setPhoto(c.toDataURL('image/jpeg', .72));
-    v.srcObject?.getTracks().forEach(t => t.stop());
+  const saveConnection = async () => {
+    setError('');
+    try {
+      connectionSettings.save(settings);
+      await checkServer();
+      setServerStatus('online');
+      notify('اتصال به سرور برقرار شد.');
+    } catch (e) { setServerStatus('offline'); setError(e.message); }
   };
-  const submitAttendance = kind => {
-    const person = people.find(p => p.id === employeeId && p.pin === pin);
-    if (!person) { notify('کد پرسنلی یا رمز عبور صحیح نیست.'); return; }
-    if (!photo) { notify('برای ثبت تردد ابتدا عکس بگیرید.'); return; }
-    const event = { id: crypto.randomUUID(), employeeId, name: person.name, kind, time: clock, date: new Date().toLocaleDateString('en-CA'), photo };
-    setEvents(old => [event, ...old]);
-    setPeople(old => old.map(p => p.id === employeeId ? { ...p, status: kind === 'ورود' ? 'حاضر' : 'خارج‌شده', time: clock.slice(0,5) } : p));
-    setCameraOpen(false); setPin(''); setEmployeeId(''); setPhoto('');
-    notify('تردد با موفقیت در این دستگاه ثبت شد.');
+  const doLogin = async e => {
+    e.preventDefault(); setBusy(true); setError('');
+    try {
+      connectionSettings.save(settings);
+      const data = await apiRequest('/api/auth/login', { method: 'POST', body: JSON.stringify({ organizationId: settings.organizationId, ...login }) });
+      connectionSettings.setSession(data); setUser(data.user); setTab('dashboard'); notify('با موفقیت وارد شدید.');
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+  const logout = () => { connectionSettings.clearSession(); setUser(null); setEmployees([]); setEvents([]); setLeaves([]); };
+  const addEmployee = async e => {
+    e.preventDefault(); setError('');
+    try {
+      if (!user?.branchId) throw new Error('شناسه شعبه در حساب مدیر موجود نیست؛ تنظیمات اولیه سرور باید اصلاح شود.');
+      await apiRequest('/api/employees', { method: 'POST', body: JSON.stringify({ ...newEmployee, branchId: user.branchId }) });
+      setNewEmployee({ employeeCode: '', name: '', jobTitle: '', password: '', role: 'employee' });
+      await loadData(); notify('کارمند به پایگاه داده مرکزی اضافه شد.');
+    } catch (e) { setError(e.message); }
+  };
+  const recordAttendance = async e => {
+    e.preventDefault(); setError('');
+    try {
+      await apiRequest('/api/attendance', { method: 'POST', body: JSON.stringify(attendance) });
+      await loadData(); notify('تردد در سرور مرکزی ثبت شد.');
+    } catch (e) { setError(e.message); }
+  };
+  const submitLeave = async e => {
+    e.preventDefault(); setError('');
+    try {
+      await apiRequest('/api/leave', { method: 'POST', body: JSON.stringify(leave) });
+      setLeave({ type: 'annual', startsAt: '', endsAt: '', reason: '' });
+      await loadData(); notify('درخواست مرخصی ثبت شد.');
+    } catch (e) { setError(e.message); }
+  };
+  const reviewLeave = async (id, status) => {
+    try { await apiRequest('/api/leave/' + id + '/review', { method: 'PATCH', body: JSON.stringify({ status }) }); await loadData(); }
+    catch (e) { setError(e.message); }
   };
   const exportCsv = () => {
-    const rows = [['نام', 'کد پرسنلی', 'نوع تردد', 'تاریخ', 'ساعت'], ...events.map(e => [e.name, e.employeeId, e.kind, e.date, e.time])];
-    const csv = '\ufeff' + rows.map(r => r.map(x => '"' + String(x).replaceAll('"','""') + '"').join(',')).join('\n');
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = 'hozourban-report.csv'; a.click(); URL.revokeObjectURL(a.href);
+    const rows = [['نام', 'کد پرسنلی', 'نوع', 'زمان']];
+    events.forEach(x => rows.push([x.full_name, x.employee_code, x.kind, new Date(x.occurred_at).toLocaleString('fa-IR')]));
+    const csv = '\ufeff' + rows.map(r => r.map(v => '"' + String(v ?? '').replaceAll('"', '""') + '"').join(',')).join('\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = 'hozourban-attendance.csv'; a.click(); URL.revokeObjectURL(a.href);
   };
+  const filtered = useMemo(() => employees.filter(p => (p.full_name + p.employee_code + (p.job_title || '')).includes(query.trim())), [employees, query]);
+  const isManager = ['owner', 'admin', 'hr'].includes(user?.role);
+
+  if (!user) return <div className="login-shell"><div className="login-card">
+    <div className="login-brand"><div className="brand-mark"><Activity size={24}/></div><div><b>حضوربان</b><small>سامانه مرکزی حضور و غیاب</small></div></div>
+    <h1>اتصال به سامانه کارخانه</h1><p>برای استفاده از اطلاعات واقعی، ابتدا سرور مرکزی را تنظیم و سپس وارد شوید.</p>
+    <form onSubmit={doLogin}>
+      <label>آدرس سرور API</label><input dir="ltr" placeholder="https://your-server.example.com" value={settings.baseUrl} onChange={e=>setSettings(s=>({...s,baseUrl:e.target.value}))} required/>
+      <label>شناسه سازمان (Organization ID)</label><input dir="ltr" placeholder="UUID سازمان" value={settings.organizationId} onChange={e=>setSettings(s=>({...s,organizationId:e.target.value}))} required/>
+      <div className="form-divider"/>
+      <label>کد کاربری</label><input autoComplete="username" value={login.employeeCode} onChange={e=>setLogin(s=>({...s,employeeCode:e.target.value}))} required/>
+      <label>رمز عبور</label><input type="password" autoComplete="current-password" value={login.password} onChange={e=>setLogin(s=>({...s,password:e.target.value}))} required/>
+      {error && <div className="error-box">{error}</div>}
+      <button className="primary-btn full" disabled={busy}>{busy ? 'در حال اتصال...' : 'اتصال و ورود'}</button>
+    </form>
+    <button className="secondary-wide" onClick={saveConnection}><Wifi size={16}/> فقط بررسی اتصال سرور</button>
+    <small className="connection-note">اطلاعات ورود آزمایشی قبلی حذف شده‌اند. برای ورود باید مدیر اولیه را روی سرور بسازید.</small>
+  </div>{notice && <div className="toast">{notice}</div>}</div>;
 
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark"><Activity size={23}/></div><div><b>حضوربان</b><small>سامانه مدیریت منابع انسانی</small></div></div>
-      <div className="company-switch"><div className="company-icon">خ</div><div><b>کارخانه خورشید نو</b><small>شعبه اصلی · اصفهان</small></div><ChevronDown size={16}/></div>
+      <div className="company-switch"><div className="company-icon">خ</div><div><b>کارخانه خورشید نو</b><small>سامانه متصل به سرور</small></div></div>
       <div className="nav-caption">منوی اصلی</div>
-      <button className={tab==='dashboard'?'nav-item active':'nav-item'} onClick={()=>setTab('dashboard')}><LayoutDashboard size={18}/> نمای کلی</button>
-      <button className={tab==='employees'?'nav-item active':'nav-item'} onClick={()=>setTab('employees')}><Users size={18}/> کارکنان</button>
-      <button className={tab==='attendance'?'nav-item active':'nav-item'} onClick={()=>setTab('attendance')}><Clock3 size={18}/> ترددها و گزارش‌ها</button>
-      <button className={tab==='kiosk'?'nav-item active':'nav-item'} onClick={()=>setTab('kiosk')}><Camera size={18}/> دستگاه حضور و غیاب</button>
-      <div className="sidebar-bottom"><div className="secure-note"><ShieldCheck size={18}/><span>محیط آزمایشی حضوربان<br/><small>اطلاعات روی همین مرورگر ذخیره می‌شود</small></span></div><div className="user-mini"><div className="avatar">م</div><div><b>مدیر سیستم</b><small>مدیر منابع انسانی</small></div><LogOut size={17}/></div></div>
+      {['dashboard','employees','attendance','leave','kiosk','settings'].map(key=><button key={key} className={tab===key?'nav-item active':'nav-item'} onClick={()=>setTab(key)}>{key==='dashboard'?<Activity size={18}/>:key==='employees'?<Users size={18}/>:key==='attendance'?<Clock3 size={18}/>:key==='leave'?<CalendarDays size={18}/>:key==='kiosk'?<Check size={18}/>:<Settings size={18}/>} {labels[key]}</button>)}
+      <div className="sidebar-bottom"><div className="secure-note"><ShieldCheck size={18}/><span>اتصال مرکزی<br/><small>{serverStatus==='online'?'سرور در دسترس است':'وضعیت اتصال بررسی نشده'}</small></span></div><div className="user-mini"><div className="avatar">{(user.name||'م').slice(0,1)}</div><div><b>{user.name}</b><small>{user.role}</small></div><button className="icon-btn" onClick={logout} title="خروج"><LogOut size={17}/></button></div></div>
     </aside>
     <main className="main">
-      <header className="topbar"><div><div className="crumb">کارخانه خورشید نو <span>/</span> {({dashboard:'نمای کلی',employees:'مدیریت کارکنان',attendance:'گزارش ترددها',kiosk:'ثبت تردد'})[tab]}</div><h1>{({dashboard:'داشبورد مدیریتی',employees:'مدیریت کارکنان',attendance:'ترددها و گزارش‌ها',kiosk:'دستگاه حضور و غیاب'})[tab]}</h1></div><div className="top-actions"><div className="date-chip"><Clock3 size={16}/><span>{clock}</span></div><button className="icon-btn" aria-label="اعلان‌ها"><Bell size={19}/><i/></button><div className="avatar">م</div></div></header>
-      {tab==='dashboard' && <section className="content">
-        <div className="welcome"><div><span className="eyebrow">گزارش لحظه‌ای مجموعه</span><h2>روز بخیر، مدیر عزیز 👋</h2><p>{faDate.format(new Date())} · وضعیت نیروی انسانی در یک نگاه</p></div><button className="primary-btn" onClick={()=>setTab('kiosk')}><Camera size={17}/> ثبت ورود و خروج</button></div>
-        <div className="stats-grid">
-          <Stat icon={<Users/>} label="کل کارکنان" value={people.length} note="نیروی ثبت‌شده" tone="blue"/>
-          <Stat icon={<Check/>} label="حاضر در مجموعه" value={present} note="در حال فعالیت" tone="green"/>
-          <Stat icon={<Clock3/>} label="غایب امروز" value={people.filter(p=>p.status==='غایب').length} note="نیازمند بررسی" tone="orange"/>
-          <Stat icon={<ArrowUpRight/>} label="ترددهای امروز" value={todayEvents.length} note="ورود و خروج ثبت‌شده" tone="purple"/>
-        </div>
-        <div className="dashboard-grid"><div className="panel"><div className="panel-head"><div><h3>وضعیت حضور کارکنان</h3><p>آخرین وضعیت ثبت‌شده پرسنل</p></div><button className="text-btn" onClick={()=>setTab('employees')}>مشاهده همه</button></div><PeopleTable people={people.slice(0,5)}/></div>
-        <div className="panel activity-panel"><div className="panel-head"><div><h3>آخرین ترددها</h3><p>رویدادهای ثبت‌شده در دستگاه</p></div><Activity size={19}/></div>{events.slice(0,5).length ? events.slice(0,5).map(e=><div className="event-row" key={e.id}><div className={e.kind==='ورود'?'event-icon in':'event-icon out'}>{e.kind==='ورود'?<ArrowDownLeft size={17}/>:<ArrowUpRight size={17}/>}</div><div className="event-info"><b>{e.name}</b><small>{e.kind} · {e.date}</small></div><time>{e.time}</time></div>) : <div className="empty"><Clock3 size={26}/><b>هنوز ترددی ثبت نشده</b><span>پس از اولین ثبت ورود یا خروج، رویدادها اینجا نمایش داده می‌شوند.</span></div>}</div></div>
-        <div className="notice-bar"><ShieldCheck size={19}/><span><b>یادآوری امنیتی:</b> این نسخه، نمونه اولیه رابط کاربری است. برای استفاده واقعی باید سرور، احراز هویت امن، پایگاه داده و کنترل دسترسی راه‌اندازی شود.</span></div>
-      </section>}
-      {tab==='employees' && <section className="content"><div className="section-toolbar"><div><h2>فهرست کارکنان</h2><p>اطلاعات پایه و وضعیت کاری پرسنل</p></div><div className="search-box"><Search size={17}/><input placeholder="جست‌وجوی نام، کد یا سمت..." value={query} onChange={e=>setQuery(e.target.value)}/></div></div><div className="panel"><PeopleTable people={filtered}/></div></section>}
-      {tab==='attendance' && <section className="content"><div className="section-toolbar"><div><h2>تاریخچه تردد</h2><p>تمام ورودها و خروج‌های ثبت‌شده در این مرورگر</p></div><button className="outline-btn" onClick={exportCsv}><Download size={17}/> خروجی Excel / CSV</button></div><div className="panel"><div className="table-wrap"><table><thead><tr><th>کارمند</th><th>کد پرسنلی</th><th>نوع تردد</th><th>تاریخ</th><th>ساعت</th><th>عکس</th></tr></thead><tbody>{events.map(e=><tr key={e.id}><td><b>{e.name}</b></td><td>{e.employeeId}</td><td><span className={e.kind==='ورود'?'status present':'status away'}>{e.kind}</span></td><td>{e.date}</td><td>{e.time}</td><td>{e.photo?<a href={e.photo} target="_blank" rel="noreferrer">مشاهده عکس</a>:'—'}</td></tr>)}</tbody></table>{!events.length&&<div className="empty"><Clock3 size={28}/><b>گزارشی برای نمایش وجود ندارد</b><span>ترددهای ثبت‌شده در این بخش فهرست می‌شوند.</span></div>}</div></div></section>}
-      {tab==='kiosk' && <section className="content kiosk-content"><div className="kiosk-intro"><div className="kiosk-symbol"><Camera size={27}/></div><span className="eyebrow">کیوسک ورودی کارخانه</span><h2>ثبت ورود و خروج کارکنان</h2><p>کد پرسنلی و رمز خود را وارد کنید، سپس عکس لحظه‌ای بگیرید.</p></div><div className="kiosk-card"><div className="kiosk-time">{clock}</div><div className="kiosk-date">{faDate.format(new Date())}</div><div className="field"><label>کد پرسنلی</label><input inputMode="numeric" placeholder="مثلاً ۱۰۰۱" value={employeeId} onChange={e=>setEmployeeId(e.target.value)} /></div><div className="field"><label>رمز عبور</label><input type="password" inputMode="numeric" placeholder="رمز چهاررقمی آزمایشی" value={pin} onChange={e=>setPin(e.target.value)}/></div>{photo?<div className="photo-preview"><img src={photo} alt="تصویر ثبت‌شده"/><button className="retake" onClick={startCamera}>گرفتن عکس مجدد</button></div>:<button className="camera-btn" onClick={startCamera}><Camera size={18}/> فعال‌کردن دوربین و گرفتن عکس</button>}<div className="kiosk-buttons"><button className="entry-btn" onClick={()=>submitAttendance('ورود')}><ArrowDownLeft size={18}/> ثبت ورود</button><button className="exit-btn" onClick={()=>submitAttendance('خروج')}><ArrowUpRight size={18}/> ثبت خروج</button></div><p className="demo-hint">حساب‌های آزمایشی: کدهای ۱۰۰۱ تا ۱۰۰۵ · رمز همه: ۱۲۳۴</p></div></section>}
-    </main>
-    {notice&&<div className="toast"><Check size={18}/>{notice}</div>}
-    {cameraOpen&&<div className="modal-backdrop"><div className="camera-modal"><div className="modal-head"><b>ثبت تصویر پرسنل</b><button className="icon-btn" onClick={()=>setCameraOpen(false)}><X/></button></div><div className="video-frame">{photo?<img src={photo} alt="پیش‌نمایش"/>:<video ref={videoRef} autoPlay playsInline muted/>}</div>{streamError&&<p className="error-text">{streamError}</p>}<button className="primary-btn full" onClick={takePhoto}><Camera size={18}/> ثبت عکس</button><canvas ref={canvasRef} hidden/></div></div>}
+      <header className="topbar"><div><div className="crumb">کارخانه خورشید نو <span>/</span> {labels[tab]}</div><h1>{labels[tab]}</h1></div><div className="top-actions"><div className="date-chip"><Clock3 size={16}/><span>{clock}</span></div><button className="icon-btn" onClick={loadData} title="همگام‌سازی"><RefreshCw size={18}/></button><div className="avatar">{(user.name||'م').slice(0,1)}</div></div></header>
+      {error && <div className="error-banner"><WifiOff size={17}/>{error}<button onClick={()=>setError('')}><X size={16}/></button></div>}
+      {tab==='dashboard' && <section className="content"><div className="welcome"><div><span className="eyebrow">گزارش سرور مرکزی</span><h2>روز بخیر، {user.name} 👋</h2><p>{faDate.format(new Date())} · داده‌های دریافت‌شده از پایگاه داده مرکزی</p></div><button className="primary-btn" onClick={()=>setTab('kiosk')}>ثبت تردد</button></div><div className="stats-grid"><Stat label="کل کارکنان" value={employees.length}/><Stat label="رویدادهای تردد" value={events.length}/><Stat label="درخواست‌های در انتظار" value={leaves.filter(x=>x.status==='pending').length}/><Stat label="وضعیت سرور" value={serverStatus==='online'?'متصل':'نامشخص'}/></div><div className="panel"><div className="panel-head"><div><h3>آخرین ترددها</h3><p>آخرین رویدادهای ثبت‌شده در سرور</p></div><button className="text-btn" onClick={loadData}>به‌روزرسانی</button></div><EventsTable events={events.slice(0,10)}/></div></section>}
+      {tab==='employees' && <section className="content"><div className="section-toolbar"><div><h2>کارکنان</h2><p>فهرست همگام‌شده با سرور مرکزی</p></div><input className="search-input" placeholder="جست‌وجو..." value={query} onChange={e=>setQuery(e.target.value)}/></div>{isManager && <form className="panel form-grid" onSubmit={addEmployee}><h3>افزودن کارمند</h3><input placeholder="کد پرسنلی" value={newEmployee.employeeCode} onChange={e=>setNewEmployee(s=>({...s,employeeCode:e.target.value}))} required/><input placeholder="نام و نام خانوادگی" value={newEmployee.name} onChange={e=>setNewEmployee(s=>({...s,name:e.target.value}))} required/><input placeholder="عنوان شغلی" value={newEmployee.jobTitle} onChange={e=>setNewEmployee(s=>({...s,jobTitle:e.target.value}))}/><input type="password" minLength="10" placeholder="رمز اولیه (حداقل ۱۰ کاراکتر)" value={newEmployee.password} onChange={e=>setNewEmployee(s=>({...s,password:e.target.value}))} required/><select value={newEmployee.role} onChange={e=>setNewEmployee(s=>({...s,role:e.target.value}))}><option value="employee">کارمند</option><option value="hr">منابع انسانی</option><option value="kiosk">کیوسک</option></select><button className="primary-btn"><Plus size={16}/> افزودن</button></form>}<div className="panel"><PeopleTable people={filtered}/></div></section>}
+      {tab==='attendance' && <section className="content"><div className="section-toolbar"><div><h2>گزارش تردد</h2><p>سوابق ثبت‌شده روی سرور</p></div><button className="outline-btn" onClick={exportCsv}><Download size={16}/> خروجی CSV</button></div><div className="panel"><EventsTable events={events}/></div></section>}
+      {tab==='kiosk' && <section className="content kiosk-content"><div className="kiosk-intro"><div className="kiosk-symbol"><Check size={27}/></div><h2>ثبت ورود و خروج</h2><p>ثبت مستقیم در پایگاه داده مرکزی با زمان سرور</p></div><form className="kiosk-card" onSubmit={recordAttendance}><div className="kiosk-time">{clock}</div><div className="kiosk-date">{faDate.format(new Date())}</div><label>کد پرسنلی</label><input value={attendance.employeeCode} onChange={e=>setAttendance(s=>({...s,employeeCode:e.target.value}))} required/><label>نوع تردد</label><select value={attendance.kind} onChange={e=>setAttendance(s=>({...s,kind:e.target.value}))}><option value="in">ورود</option><option value="out">خروج</option><option value="break_start">شروع استراحت</option><option value="break_end">پایان استراحت</option></select><button className="primary-btn full" disabled={busy}>ثبت در سرور</button><small className="connection-note">این نسخه ثبت عکس را تا زمان راه‌اندازی امن فضای ذخیره‌سازی تصویر فعال نمی‌کند.</small></form></section>}
+      {tab==='leave' && <section className="content"><div className="section-toolbar"><div><h2>درخواست‌های مرخصی</h2><p>ثبت و بررسی درخواست‌ها</p></div></div><form className="panel form-grid" onSubmit={submitLeave}><h3>ثبت درخواست جدید</h3><select value={leave.type} onChange={e=>setLeave(s=>({...s,type:e.target.value}))}><option value="annual">استحقاقی</option><option value="sick">استعلاجی</option><option value="unpaid">بدون حقوق</option><option value="mission">مأموریت</option></select><label>از تاریخ</label><input type="date" value={leave.startsAt} onChange={e=>setLeave(s=>({...s,startsAt:e.target.value}))} required/><label>تا تاریخ</label><input type="date" value={leave.endsAt} onChange={e=>setLeave(s=>({...s,endsAt:e.target.value}))} required/><input placeholder="توضیحات (اختیاری)" value={leave.reason} onChange={e=>setLeave(s=>({...s,reason:e.target.value}))}/><button className="primary-btn">ثبت درخواست</button></form><div className="panel leave-list">{leaves.map(x=><div className="leave-row" key={x.id}><div><b>{x.full_name || 'درخواست من'} · {x.leave_type}</b><small>{x.starts_at} تا {x.ends_at} · {x.status}</small></div>{isManager&&x.status==='pending'&&<div><button className="approve" onClick={()=>reviewLeave(x.id,'approved')}>تأیید</button><button className="reject" onClick={()=>reviewLeave(x.id,'rejected')}>رد</button></div>}</div>)}{!leaves.length&&<div className="empty">درخواستی ثبت نشده است.</div>}</div></section>}
+      {tab==='settings' && <section className="content"><div className="panel settings-panel"><h2>تنظیمات اتصال</h2><p>آدرس سرور و شناسه سازمان را تنظیم کنید. تغییر آدرس، نشست فعلی را خارج می‌کند.</p><label>آدرس API</label><input dir="ltr" value={settings.baseUrl} onChange={e=>setSettings(s=>({...s,baseUrl:e.target.value}))}/><label>شناسه سازمان</label><input dir="ltr" value={settings.organizationId} onChange={e=>setSettings(s=>({...s,organizationId:e.target.value}))}/><button className="primary-btn" onClick={async()=>{logout();await saveConnection();}}>ذخیره و آزمایش اتصال</button><p className="connection-note">وضعیت فعلی: {serverStatus==='online'?'متصل':'اتصال تأیید نشده'}</p></div></section>}
+    </main>{notice&&<div className="toast"><Check size={17}/>{notice}</div>}
   </div>;
 }
 
-function Stat({icon,label,value,note,tone}) { return <div className="stat-card"><div className={'stat-icon '+tone}>{icon}</div><div className="stat-label">{label}</div><strong>{value}</strong><small>{note}</small></div>; }
-function PeopleTable({people}) { return <div className="table-wrap"><table><thead><tr><th>نام و نام خانوادگی</th><th>کد پرسنلی</th><th>سمت سازمانی</th><th>شیفت</th><th>وضعیت</th></tr></thead><tbody>{people.map(p=><tr key={p.id}><td><div className="person-cell"><div className="person-avatar">{p.name.slice(0,1)}</div><b>{p.name}</b></div></td><td>{p.id}</td><td>{p.role}</td><td>{p.shift}</td><td><span className={'status '+(p.status==='حاضر'?'present':p.status==='غایب'?'absent':'away')}>{p.status}</span></td></tr>)}</tbody></table>{!people.length&&<div className="empty">کارمندی پیدا نشد.</div>}</div>; }
+function Stat({label,value}) { return <div className="stat-card"><div className="stat-icon green"><Activity size={19}/></div><div className="stat-label">{label}</div><strong>{value}</strong></div>; }
+function PeopleTable({people}) { return <div className="table-wrap"><table><thead><tr><th>نام</th><th>کد پرسنلی</th><th>عنوان شغلی</th><th>نقش</th><th>وضعیت</th></tr></thead><tbody>{people.map(p=><tr key={p.id}><td><b>{p.full_name}</b></td><td>{p.employee_code}</td><td>{p.job_title||'—'}</td><td>{p.role}</td><td><span className={'status '+(p.active?'present':'absent')}>{p.active?'فعال':'غیرفعال'}</span></td></tr>)}</tbody></table>{!people.length&&<div className="empty">کارمندی برای نمایش وجود ندارد.</div>}</div>; }
+function EventsTable({events}) { return <div className="table-wrap"><table><thead><tr><th>نام</th><th>کد پرسنلی</th><th>نوع تردد</th><th>زمان ثبت‌شده</th></tr></thead><tbody>{events.map(x=><tr key={x.id}><td>{x.full_name}</td><td>{x.employee_code}</td><td>{({in:'ورود',out:'خروج',break_start:'شروع استراحت',break_end:'پایان استراحت'})[x.kind]||x.kind}</td><td>{new Date(x.occurred_at).toLocaleString('fa-IR')}</td></tr>)}</tbody></table>{!events.length&&<div className="empty">ترددی ثبت نشده است.</div>}</div>; }
