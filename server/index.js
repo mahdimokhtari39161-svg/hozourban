@@ -16,7 +16,21 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process
 const app = express();
 app.disable('x-powered-by');
 app.use(helmet());
-app.use(cors({ origin: (process.env.CORS_ORIGIN || '').split(',').filter(Boolean), credentials: true }));
+const allowedOrigins = new Set([
+  'https://localhost',
+  'capacitor://localhost',
+  'http://localhost',
+  'http://localhost:5173',
+  ...(process.env.CORS_ORIGIN || '').split(',').map(value => value.trim()).filter(Boolean),
+]);
+app.use(cors({
+  origin(origin, callback) {
+    // Native Capacitor requests may omit Origin; browser origins must be allow-listed.
+    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+    return callback(new Error('Origin is not allowed by CORS'));
+  },
+  credentials: true,
+}));
 app.use(express.json({ limit: '1mb' }));
 app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false }));
 const asyncRoute = fn => (req,res,next) => Promise.resolve(fn(req,res,next)).catch(next);
