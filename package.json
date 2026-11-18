@@ -10,7 +10,8 @@
     "api": "node server/index.js",
     "bootstrap": "node server/seed.js",
     "android:sync": "npm run build && cap sync android",
-    "android:open": "cap open android"
+    "android:open": "cap open android",
+    "migrate": "node server/migrate.js"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
