@@ -7,6 +7,7 @@ on:
     paths:
       - 'src/**'
       - 'public/**'
+      - 'android-res/**'
       - 'index.html'
       - 'package.json'
       - 'capacitor.config.json'
@@ -38,6 +39,13 @@ jobs:
         run: npx cap add android
       - name: Sync Android project
         run: npx cap sync android
+      - name: Apply Hozourban launcher icon
+        run: |
+          mkdir -p android/app/src/main/res/drawable android/app/src/main/res/mipmap-anydpi-v26 android/app/src/main/res/values
+          cp android-res/drawable/hozourban_icon_foreground.xml android/app/src/main/res/drawable/
+          cp android-res/mipmap-anydpi-v26/ic_launcher.xml android/app/src/main/res/mipmap-anydpi-v26/
+          cp android-res/mipmap-anydpi-v26/ic_launcher_round.xml android/app/src/main/res/mipmap-anydpi-v26/
+          cp android-res/values/hozourban_icon_colors.xml android/app/src/main/res/values/
       - name: Build debug APK
         working-directory: android
         run: |
